@@ -1,0 +1,106 @@
+# RGB + Cb Dual-Stream Tamper Detection Model Configuration
+
+# Data settings
+data:
+  root_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/data"              # Training data: ./data/genuine/, ./data/tamper/
+  image_size: 224
+  batch_size: 64
+  num_workers: 8
+  val_split: 0.2
+  test_split: 0.0
+  random_state: 42
+
+  # External test dataset (CSV files with image_path, fraud_type columns)
+  # This is separate from val_split and used for final evaluation on specific test scenarios
+  test_dataset:
+    enabled: true
+    csv_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/data/testing_dataset"
+    # csv_files: If empty or not specified, all CSV files in csv_dir will be loaded automatically.
+    #            If specified, only the listed CSV files will be loaded.
+    csv_files:
+      # - "color_ghost.csv"
+      # - "cover_face.csv"
+
+
+# Model architecture
+model:
+  backbone: "efficientnet_b3"     # resnet18, resnet50, efficientnet_b0, efficientnet_b3
+  pretrained: true
+  num_classes: 2
+  dropout: 0.5
+  cb_encoder_dim: 128             # Cb encoder output dimension
+  fusion_dim: 256                 # Cross-modal fusion dimension
+  patch_grid_size: 4              # 4x4 = 16 patches per region
+  regions_config: null            # null = use default configs/regions.yaml
+
+# Training settings
+training:
+  epochs: 60
+  learning_rate: 0.0005
+  weight_decay: 0.01
+  optimizer: "adamw"
+  grad_clip_max_norm: 1.0
+
+  loss:
+    use_focal: false
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+    classification_weight: 1.0
+    cb_consistency_weight: 0.3
+    cb_margin: 0.5
+    use_region_level: true
+    patches_per_region: 16
+
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 5
+    min_lr: 0.00005
+
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.0005
+    monitor_metric: "f1_score"
+
+# Augmentation (no color augmentations - preserves Cb consistency)
+augmentation:
+  enabled: true
+  random_rotation:
+    enabled: true
+    degrees: 5
+  gaussian_blur:
+    enabled: true
+    kernel_size: 3
+    probability: 0.1
+
+# Device settings
+device:
+  use_cuda: true
+  gpu_id: 3
+  mixed_precision: true
+
+# Evaluation
+evaluation:
+  classification_threshold: 0.5
+  far_constraint_threshold: 0.01
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - auc_roc
+    - frr
+    - far
+
+# Logging
+logging:
+  experiment_name: "rgb_cb_model"
+  log_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/logs"
+  save_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/checkpoints"
+  log_every_n_steps: 50
+
+# Random seed
+random_seed:
+  enabled: true
+  seed: 42
+  deterministic: false

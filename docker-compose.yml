@@ -1,0 +1,25 @@
+services:
+  tamper-detection:
+    build: .
+    container_name: tamper-detection
+    shm_size: '8gb'
+    ports:
+      - "7500:7500"
+    volumes:
+      - .:/app
+      - /mnt/auto-ekyc:/mnt/auto-ekyc
+      - /mnt2/auto-ekyc/id_physical_tamper_new:/mnt2/auto-ekyc/id_physical_tamper_new
+      - /mnt2/raw_dataset/research/idv:/mnt2/raw_dataset/research/idv
+    environment:
+      - MODEL_PATH=/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/trained_model/tamper_with_color_space.pth
+      - CONFIG_PATH=/app/configs/config.yaml
+      - THRESHOLD=0.5
+    command: python scripts/api.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1', '2', '3']
+              capabilities: [gpu]
+    restart: unless-stopped
