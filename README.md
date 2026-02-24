@@ -184,27 +184,36 @@ testing_dataset/
 └── digital_tamper_face.csv
 ```
 
-### 2. Configure
+### 2. Loss Functions & Key Innovation
 
-Edit `configs/config.yaml`. Key settings:
+The model minimizes: **`L_total = L_classification + 0.3 × L_cb_consistency`**
 
-```yaml
-data:
-  root_dir: "./data"
-  batch_size: 64          # Adjust based on GPU memory
-  val_split: 0.2
+| Loss | Description |
+|------|-------------|
+| **Classification** | CrossEntropyLoss (default); Focal Loss available for class imbalance |
+| **Cb Consistency** | Exploits tampered regions showing inconsistent chroma (Cb channel) patterns |
 
-model:
-  backbone: "efficientnet_b3"
+**How Cb Consistency Loss works:**
+- **Genuine images:** Minimize pairwise distances within regions (patches should be consistent)
+- **Tampered images:** Margin-based loss — at least one region must show inconsistency (distance > margin)
 
-training:
-  epochs: 60
-  learning_rate: 0.0005
-```
+### 3. Hyperparameters
 
-See [Configuration Reference](#configuration-reference) for all options.
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `epochs` | 60 | Maximum training epochs |
+| `learning_rate` | 0.0005 | Initial learning rate |
+| `batch_size` | 64 | Images per batch |
+| `weight_decay` | 0.01 | AdamW regularization |
+| `cb_consistency_weight` | 0.3 | Weight for Cb consistency loss |
+| `cb_margin` | 0.5 | Margin threshold for tampered images |
+| `val_split` | 0.2 | Train/validation split (stratified) |
 
-### 3. Start Training
+**Augmentation:** Rotation ±5°, Gaussian blur 10%. Color augmentation intentionally excluded to preserve Cb channel consistency signal.
+
+Edit `configs/config.yaml` to customize. See [Configuration Reference](#configuration-reference) for all options.
+
+### 4. Start Training
 
 All commands below are run **inside the container**.
 
@@ -212,7 +221,7 @@ All commands below are run **inside the container**.
 python scripts/train.py --config configs/config.yaml
 ```
 
-### 4. Monitor Progress
+### 5. Monitor Progress
 
 ```bash
 # View logs (run from host, outside container)
@@ -223,7 +232,17 @@ tensorboard --logdir logs --host 0.0.0.0
 # Open http://localhost:6006
 ```
 
-### 5. Resume from Checkpoint
+**Metrics logged:** Train loss (total, classification, Cb consistency), Validation F1, AUC, FAR/FRR curves.
+
+### 6. Early Stopping
+
+| Setting | Value |
+|---------|-------|
+| Monitor metric | Validation F1 score |
+| Patience | 10 epochs without improvement |
+| Behavior | Training stops automatically when plateau detected |
+
+### 7. Resume from Checkpoint
 
 ```bash
 python scripts/train.py \
@@ -231,7 +250,7 @@ python scripts/train.py \
   --resume checkpoints/20250209_120000/last_epoch.pth
 ```
 
-### 6. Training Outputs
+### 8. Training Outputs
 
 ```
 checkpoints/20250209_120000/
@@ -246,19 +265,12 @@ checkpoints/20250209_120000/
 
 **Checkpoint Saving Strategy:**
 
-| Checkpoint | Saved When | Metric |
-|------------|------------|--------|
-| `best_f1.pth` | Validation F1 exceeds previous best | `val_f1_score` |
-| `best_auc.pth` | Validation AUC exceeds previous best | `val_auc_roc` |
-| `best_frr_under_far.pth` | FRR lowest while FAR ≤ threshold | `val_frr` (constrained) |
-| `last_epoch.pth` | End of training | N/A |
-
-**Which checkpoint to use:**
-- `best_f1.pth` - Recommended for production
-- `best_auc.pth` - Best ranking performance
-- `best_frr_under_far.pth` - Low false acceptance scenarios
-
-**Early Stopping:** Training stops if F1 doesn't improve for `patience` epochs (default: 10).
+| Checkpoint | Selection Criteria | Recommended Use Case |
+|------------|-------------------|----------------------|
+| `best_f1.pth` | Highest validation F1 | Balanced precision/recall |
+| `best_auc.pth` | Highest validation AUC | Overall ranking quality |
+| `best_frr_under_far.pth` | Lowest FRR when FAR ≤ 1% | Production (security-focused) |
+| `last_epoch.pth` | Final training epoch | Resume interrupted training |
 
 ---
 
