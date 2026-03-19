@@ -124,31 +124,102 @@ class FocalLoss(nn.Module):
         return loss.mean()
 
 
+class SupervisedContrastiveLoss(nn.Module):
+    """
+    Supervised Contrastive Loss (Khosla et al., NeurIPS 2020).
+
+    Shapes the feature space so that same-class samples cluster tightly and
+    cross-class samples are pushed apart on the unit hypersphere.
+
+    Reference: CFL-Net WACV 2023, SeeABLE ICCV 2023.
+    """
+
+    def __init__(self, temperature: float = 0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            features: (B, D) — un-normalised feature vectors
+            labels:   (B,)   — integer class labels
+        Returns:
+            Scalar contrastive loss, or 0.0 if no valid anchor exists.
+        """
+        B = features.size(0)
+        if B < 2:
+            return torch.tensor(0.0, device=features.device)
+
+        # L2-normalise onto unit hypersphere
+        features = F.normalize(features, dim=1)
+
+        # Cosine similarity matrix scaled by temperature  (B, B)
+        sim = torch.matmul(features, features.T) / self.temperature
+
+        # Masks
+        labels = labels.view(-1, 1)                           # (B, 1)
+        pos_mask = (labels == labels.T).float()               # same class
+        eye = torch.eye(B, device=features.device)
+        pos_mask = pos_mask * (1 - eye)                       # exclude self
+        neg_mask = 1 - eye                                    # all pairs except self
+
+        # Numerically stable: subtract max per row before exp
+        sim_max = sim.detach().max(dim=1, keepdim=True).values
+        sim_exp = torch.exp(sim - sim_max)
+
+        # For each anchor: sum positives / sum all negatives
+        num_positives = pos_mask.sum(dim=1)                   # (B,)
+        valid = num_positives > 0                             # anchors that have a positive
+
+        if valid.sum() == 0:
+            return torch.tensor(0.0, device=features.device)
+
+        numerator = (sim_exp * pos_mask).sum(dim=1)           # (B,)
+        denominator = (sim_exp * neg_mask).sum(dim=1)         # (B,)
+
+        # Avoid log(0)
+        loss_per_anchor = -torch.log(numerator / (denominator + 1e-8) + 1e-8)
+        loss_per_anchor = loss_per_anchor / num_positives.clamp(min=1)
+
+        return loss_per_anchor[valid].mean()
+
+
 class CombinedLoss(nn.Module):
-    """Combined loss: Classification + Cb Consistency."""
+    """Combined loss: Classification + Cb Consistency + (optional) Supervised Contrastive."""
 
     def __init__(self, cls_weight: float = 1.0, cb_weight: float = 0.3,
                  cb_margin: float = 0.5, use_focal_loss: bool = False,
                  focal_alpha: float = 0.25, focal_gamma: float = 2.0,
-                 patches_per_region: int = 16, use_region_level: bool = True):
+                 patches_per_region: int = 16, use_region_level: bool = True,
+                 contrastive_weight: float = 0.0, temperature: float = 0.07):
         super().__init__()
         self.cls_weight = cls_weight
         self.cb_weight = cb_weight
+        self.contrastive_weight = contrastive_weight
 
         self.cls_loss = FocalLoss(focal_alpha, focal_gamma) if use_focal_loss else nn.CrossEntropyLoss()
         self.cb_loss = CbConsistencyLoss(cb_margin, patches_per_region, use_region_level)
+        self.contrastive_loss = SupervisedContrastiveLoss(temperature)
 
     def forward(self, logits: torch.Tensor, cb_features: torch.Tensor,
-                labels: torch.Tensor) -> Dict[str, torch.Tensor]:
+                labels: torch.Tensor,
+                fused_features: torch.Tensor = None) -> Dict[str, torch.Tensor]:
         cls_loss = self.cls_loss(logits, labels)
         cb_loss_dict = self.cb_loss(cb_features, labels)
 
         total_loss = self.cls_weight * cls_loss + self.cb_weight * cb_loss_dict['total']
+
+        if self.contrastive_weight > 0 and fused_features is not None:
+            con_loss = self.contrastive_loss(fused_features, labels)
+            total_loss = total_loss + self.contrastive_weight * con_loss
+        else:
+            con_loss = torch.tensor(0.0, device=logits.device)
 
         return {
             'total': total_loss,
             'classification': cls_loss,
             'cb_consistency': cb_loss_dict['total'],
             'cb_genuine': cb_loss_dict['genuine'],
-            'cb_tampered': cb_loss_dict['tampered']
+            'cb_tampered': cb_loss_dict['tampered'],
+            'contrastive': con_loss,
         }

@@ -23,6 +23,7 @@ logs/
 .claude/
 
 # Data & Cache
+error_cases/
 *.csv
 dataset_cache.pkl
 splits.pkl

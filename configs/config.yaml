@@ -32,6 +32,8 @@ model:
   fusion_dim: 256                 # Cross-modal fusion dimension
   patch_grid_size: 4              # 4x4 = 16 patches per region
   regions_config: null            # null = use default configs/regions.yaml
+  use_srm: true                  # set true to enable SRM noise stream
+  srm_encoder_dim: 128            # output dim of SRMEncoder
 
 # Training settings
 training:
@@ -50,6 +52,8 @@ training:
     cb_margin: 0.5
     use_region_level: true
     patches_per_region: 16
+    contrastive_weight: 0.3       # set 0.3 to enable; 0 = disabled
+    temperature: 0.07             # SupCon temperature
 
   scheduler:
     type: "cosine"
@@ -76,7 +80,7 @@ augmentation:
 # Device settings
 device:
   use_cuda: true
-  gpu_id: 3
+  gpu_id: 1
   mixed_precision: true
 
 # Evaluation

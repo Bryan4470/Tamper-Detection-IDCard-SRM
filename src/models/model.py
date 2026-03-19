@@ -16,6 +16,7 @@ from typing import Dict
 from torch.hub import load_state_dict_from_url
 
 from .cb_utils import extract_cb_channel, BackgroundRegionExtractor
+from .srm_utils import SRMFilter
 
 
 class CbEncoder(nn.Module):
@@ -53,6 +54,45 @@ class CbEncoder(nn.Module):
         x = x.view(B * N, -1)
         x = self.fc(x)
         return x.view(B, N, self.output_dim)
+
+
+class SRMEncoder(nn.Module):
+    """
+    Lightweight CNN encoder for SRM noise residual maps.
+
+    Input:  (B, 30, H, W)  — SRM noise maps from SRMFilter
+    Output: (B, output_dim) — global noise feature vector
+    """
+
+    def __init__(self, output_dim: int = 128, dropout: float = 0.3):
+        super().__init__()
+        self.output_dim = output_dim
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(30, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1)
+        )
+
+        self.fc = nn.Sequential(
+            nn.Linear(256, output_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, srm_map: torch.Tensor) -> torch.Tensor:
+        x = self.conv(srm_map)
+        x = x.flatten(1)
+        return self.fc(x)
 
 
 class CrossModalFusion(nn.Module):
@@ -112,11 +152,14 @@ class RGBCbTamperDetector(nn.Module):
         fusion_dim: int = 256,
         regions_config: str = None,
         patch_grid_size: int = 4,
-        dropout: float = 0.5
+        dropout: float = 0.5,
+        use_srm: bool = False,
+        srm_encoder_dim: int = 128,
     ):
         super().__init__()
         self.backbone_name = backbone
         self.num_classes = num_classes
+        self.use_srm = use_srm
 
         if regions_config is None:
             regions_config = os.path.join(
@@ -166,6 +209,12 @@ class RGBCbTamperDetector(nn.Module):
         # Fusion
         self.fusion = CrossModalFusion(rgb_feature_dim, cb_encoder_dim, fusion_dim, 4, dropout)
 
+        # SRM stream (optional, config-gated)
+        if use_srm:
+            self.srm_filter = SRMFilter()          # fixed kernels, no grad
+            self.srm_encoder = SRMEncoder(srm_encoder_dim, dropout)
+            self.srm_proj = nn.Linear(srm_encoder_dim, fusion_dim)
+
         # Classifier
         self.classifier = nn.Sequential(
             nn.Linear(fusion_dim, 128),
@@ -184,8 +233,16 @@ class RGBCbTamperDetector(nn.Module):
         cb_patches = self.bg_extractor(cb_channel)
         cb_features = self.cb_encoder(cb_patches)
 
-        # Fusion & Classification
+        # Fusion
         fused_features = self.fusion(rgb_global, cb_features)
+
+        # SRM stream (optional)
+        if self.use_srm:
+            srm_map = self.srm_filter(images)              # (B, 30, H, W)
+            srm_global = self.srm_encoder(srm_map)         # (B, srm_encoder_dim)
+            srm_embed = self.srm_proj(srm_global)          # (B, fusion_dim)
+            fused_features = fused_features + srm_embed
+
         logits = self.classifier(fused_features)
 
         output = {'logits': logits}
@@ -193,6 +250,8 @@ class RGBCbTamperDetector(nn.Module):
             output['cb_features'] = cb_features
             output['rgb_features'] = rgb_global
             output['fused_features'] = fused_features
+            if self.use_srm:
+                output['srm_features'] = srm_global
 
         return output
 
@@ -219,5 +278,7 @@ def get_model(config: dict) -> RGBCbTamperDetector:
         fusion_dim=model_config.get('fusion_dim', 256),
         regions_config=regions_config,
         patch_grid_size=model_config.get('patch_grid_size', 4),
-        dropout=model_config.get('dropout', 0.5)
+        dropout=model_config.get('dropout', 0.5),
+        use_srm=model_config.get('use_srm', False),
+        srm_encoder_dim=model_config.get('srm_encoder_dim', 128),
     )

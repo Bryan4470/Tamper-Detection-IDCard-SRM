@@ -4,7 +4,7 @@ services:
     container_name: tamper-detection
     shm_size: '8gb'
     ports:
-      - "7500:7500"
+      - "7501:7500"
     volumes:
       - .:/app
       - /mnt/auto-ekyc:/mnt/auto-ekyc

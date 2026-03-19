@@ -1,0 +1,8 @@
+F1: 0.9957
+AUC: 0.9995
+FRR: 0.0046
+FAR: 0.0069
+Accuracy: 0.9946
+Precision: 0.9960
+Recall: 0.9954
+TP: 5028, TN: 2885, FP: 20, FN: 23
