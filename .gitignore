@@ -128,5 +128,22 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# Pretrained wight
+# Pretrained weights & checkpoints
 *.pth
+*.pt
+checkpoints/
+
+# Dataset images
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# Image files
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.gif
