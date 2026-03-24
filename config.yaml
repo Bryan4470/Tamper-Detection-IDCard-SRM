@@ -1,0 +1,25 @@
+data:
+  src_dir: '/mnt3/auto-ekyc/id_physical_tamper_new/data'
+  image_size: 256
+  batch_size: 30
+  val_split: 0.2
+  num_workers: 8
+  persistent_workers: true        # keep workers alive between epochs (requires num_workers > 0)
+
+training:
+  epochs: 80
+  learning_rate: 1.0e-4
+  min_lr: 1.0e-6
+  warmup_epochs: 3
+  weight_decay: 1.0e-2
+  grad_clip: 1.0
+
+early_stopping:
+  patience: 10
+  min_delta: 5.0e-4
+
+evaluation:
+  tamper_threshold: 0.35           # classification threshold (must match predict.py)
+  far_threshold: 0.01             # save best_frr checkpoint only when FAR <= this
+
+seed: 42
