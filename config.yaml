@@ -1,13 +1,13 @@
 data:
-  src_dir: 'C:\Users\bryancfk\extracted_images'
+  src_dir: '/mnt3/auto-ekyc/id_physical_tamper_new/data'
   image_size: 256
-  batch_size: 32
+  batch_size: 30
   val_split: 0.2
-  num_workers: 4
+  num_workers: 8
   persistent_workers: true        # keep workers alive between epochs (requires num_workers > 0)
 
 training:
-  epochs: 40
+  epochs: 80
   learning_rate: 1.0e-4
   min_lr: 1.0e-6
   warmup_epochs: 3

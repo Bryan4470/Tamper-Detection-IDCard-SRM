@@ -10,7 +10,10 @@ import os
 import sys
 import random
 import argparse
+import logging
+import pickle
 import yaml
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -49,7 +52,7 @@ VAL_SPLIT     = _CFG['data']['val_split']
 NUM_WORKERS   = _CFG['data']['num_workers']
 PERSIST_WRKRS = _CFG['data'].get('persistent_workers', False) and NUM_WORKERS > 0
 SEED          = _CFG.get('seed', 42)
-DEVICE        = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE        = 'cuda:2' if torch.cuda.is_available() else 'cpu'
 
 # Early stopping
 ES_PATIENCE        = _CFG['early_stopping']['patience']
@@ -62,9 +65,6 @@ FAR_THRESHOLD      = _CFG['evaluation']['far_threshold']
 
 os.makedirs(CKPT_DIR, exist_ok=True)
 
-EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-
-
 def set_random_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -76,29 +76,98 @@ def set_random_seed(seed: int):
 
 
 def make_splits(src_dir, val_fraction, seed):
-    """Scan src_dir/genuine and src_dir/tamper, return train/val sample lists.
-    Each sample is (abs_path, label).  Split is stratified per class.
+    """Load image paths from per-class CSV files under src_dir/genuine and src_dir/tamper.
+    Returns (train_samples, val_samples) as [(abs_path, label), ...].
+    Caches paths in dataset_cache.pkl and stratified splits in splits.pkl for fast reloads.
     """
-    rng = np.random.default_rng(seed)
-    train_samples, val_samples = [], []
+    cache_file  = os.path.join(src_dir, 'dataset_cache.pkl')
+    splits_file = os.path.join(src_dir, 'splits.pkl')
 
-    for cls_name, label in [('genuine', 0), ('tamper', 1)]:
-        cls_dir = os.path.join(src_dir, cls_name)
-        if not os.path.isdir(cls_dir):
-            print(f"[WARN] Missing folder: {cls_dir}")
-            continue
-        files = sorted([
-            os.path.join(cls_dir, f)
-            for f in os.listdir(cls_dir)
-            if os.path.splitext(f)[1].lower() in EXTS
-        ])
-        idx = rng.permutation(len(files))
-        n_val = max(1, int(len(files) * val_fraction))
-        val_idx   = idx[:n_val]
-        train_idx = idx[n_val:]
-        train_samples.extend((files[i], label) for i in train_idx)
-        val_samples.extend((files[i],   label) for i in val_idx)
+    # ── Dataset cache ─────────────────────────────────────────────────────────
+    all_paths, all_labels = None, None
+    if os.path.exists(cache_file):
+        try:
+            print(f"Loading dataset from cache: {cache_file}")
+            with open(cache_file, 'rb') as f:
+                cached = pickle.load(f)
+            all_paths  = cached['image_paths']
+            all_labels = cached['labels']
+            print(f"  {len(all_paths)} images "
+                  f"({all_labels.count(0)} genuine, {all_labels.count(1)} tamper)")
+        except Exception as e:
+            logging.warning(f"Cache load failed ({e}), rebuilding...")
 
+    if all_paths is None:
+        print("Scanning CSVs (first run — will be cached)...")
+        all_paths, all_labels = [], []
+        for cls_name, label in [('genuine', 0), ('tamper', 1)]:
+            cls_dir = os.path.join(src_dir, cls_name)
+            if not os.path.isdir(cls_dir):
+                print(f"[WARN] Missing folder: {cls_dir}")
+                continue
+            csv_files = sorted(f for f in os.listdir(cls_dir) if f.endswith('.csv'))
+            for csv_file in csv_files:
+                csv_path = os.path.join(cls_dir, csv_file)
+                print(f"  {cls_name}/{csv_file}")
+                try:
+                    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+                    if 'image_path' not in df.columns:
+                        print(f"    [SKIP] no 'image_path' column")
+                        continue
+                    count = 0
+                    for img_path in df['image_path']:
+                        if os.path.exists(img_path):
+                            all_paths.append(img_path)
+                            all_labels.append(label)
+                            count += 1
+                        else:
+                            logging.warning(f"Not found: {img_path}")
+                    print(f"    {count} images loaded")
+                except Exception as e:
+                    print(f"    [ERROR] {e}")
+        print(f"\nTotal: {len(all_paths)} images "
+              f"({all_labels.count(0)} genuine, {all_labels.count(1)} tamper)")
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump({'image_paths': all_paths, 'labels': all_labels}, f)
+            print(f"Saved dataset cache: {cache_file}")
+        except Exception as e:
+            logging.warning(f"Failed to save cache: {e}")
+
+    # ── Splits cache ──────────────────────────────────────────────────────────
+    train_idx, val_idx = None, None
+    if os.path.exists(splits_file):
+        try:
+            print(f"Loading splits from cache: {splits_file}")
+            with open(splits_file, 'rb') as f:
+                splits = pickle.load(f)
+            if splits.get('n_total') == len(all_paths):
+                train_idx = splits['train']
+                val_idx   = splits['val']
+            else:
+                print("  Dataset size changed — regenerating splits...")
+        except Exception as e:
+            logging.warning(f"Splits cache load failed ({e}), regenerating...")
+
+    if train_idx is None:
+        rng = np.random.default_rng(seed)
+        train_idx, val_idx = [], []
+        for label in [0, 1]:
+            cls_indices = [i for i, l in enumerate(all_labels) if l == label]
+            perm = rng.permutation(len(cls_indices))
+            n_val = max(1, int(len(cls_indices) * val_fraction))
+            val_idx.extend(   cls_indices[perm[i]] for i in range(n_val))
+            train_idx.extend( cls_indices[perm[i]] for i in range(n_val, len(cls_indices)))
+        try:
+            with open(splits_file, 'wb') as f:
+                pickle.dump({'train': train_idx, 'val': val_idx,
+                             'n_total': len(all_paths)}, f)
+            print(f"Saved splits cache: {splits_file}")
+        except Exception as e:
+            logging.warning(f"Failed to save splits: {e}")
+
+    train_samples = [(all_paths[i], all_labels[i]) for i in train_idx]
+    val_samples   = [(all_paths[i], all_labels[i]) for i in val_idx]
     return train_samples, val_samples
 
 
@@ -174,8 +243,9 @@ def validate(model, loader, criterion, device, threshold=TAMPER_THRESHOLD):
     rec  = recall_score(labels_np, preds_np, zero_division=0)
     avg_loss = total_loss / len(labels_np)
 
+    acc = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
     return {'loss': avg_loss, 'f1': f1, 'auc': auc, 'far': far, 'frr': frr,
-            'precision': prec, 'recall': rec,
+            'precision': prec, 'recall': rec, 'acc': acc,
             'tp': int(tp), 'tn': int(tn), 'fp': int(fp), 'fn': int(fn)}
 
 
@@ -324,9 +394,19 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
 
         print(f"Epoch {epoch:3d} | lr={get_lr(optimizer):.2e} | "
               f"loss={train_loss:.4f} | train_acc={train_acc:.4f} | "
-              f"val_f1={val_m['f1']:.4f} | val_auc={val_m['auc']:.4f} | "
+              f"val_acc={val_m['acc']:.4f} | val_f1={val_m['f1']:.4f} | val_auc={val_m['auc']:.4f} | "
               f"prec={val_m['precision']:.4f} | rec={val_m['recall']:.4f} | "
               f"FAR={val_m['far']*100:.2f}% | FRR={val_m['frr']*100:.2f}%")
+
+        if epoch % 5 == 0:
+            log_path = os.path.join(CKPT_DIR, 'train_log.csv')
+            write_header = not os.path.exists(log_path)
+            with open(log_path, 'a') as log_f:
+                if write_header:
+                    log_f.write('epoch,lr,train_loss,train_acc,val_acc,val_f1,val_auc,far,frr\n')
+                log_f.write(f"{epoch},{get_lr(optimizer):.2e},{train_loss:.4f},{train_acc:.4f},"
+                            f"{val_m['acc']:.4f},{val_m['f1']:.4f},{val_m['auc']:.4f},"
+                            f"{val_m['far']*100:.2f},{val_m['frr']*100:.2f}\n")
 
         # ── Checkpoints ────────────────────────────────────────
         if val_m['f1'] > best_val_f1 + ES_MIN_DELTA:

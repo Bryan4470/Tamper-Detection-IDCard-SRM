@@ -14,6 +14,10 @@ Usage:
 import os
 import sys
 import argparse
+import hashlib
+import logging
+import pickle
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
@@ -29,7 +33,7 @@ from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
 CKPT_PATH        = '../checkpoints/best_f1.pth'
-TEST_DIR         = r'C:\Users\bryancfk\extracted_images_test'
+TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
 DEVICE           = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -87,23 +91,75 @@ class _EvalDataset(Dataset):
         return transform(img), label
 
 
-def evaluate_test_split(model):
-    EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-    samples = []
-    counts = {'genuine': 0, 'tamper': 0}
+def _load_test_samples(test_dir, use_cache=True):
+    """Load test samples from all CSVs in test_dir (image_path + fraud_type columns).
+    Caches results in test_dir/.test_cache/ keyed by CSV file list hash.
+    """
+    csv_paths = sorted(
+        os.path.join(test_dir, f)
+        for f in os.listdir(test_dir) if f.endswith('.csv')
+    )
 
-    for cls_name, label in [('genuine', 0), ('tamper', 1)]:
-        cls_dir = os.path.join(TEST_DIR, cls_name)
-        if not os.path.isdir(cls_dir):
-            print(f"[WARN] Missing: {cls_dir}")
-            continue
-        files = [f for f in os.listdir(cls_dir)
-                 if os.path.splitext(f)[1].lower() in EXTS]
-        counts[cls_name] = len(files)
-        samples.extend((os.path.join(cls_dir, f), label) for f in files)
+    cache_key  = hashlib.md5('|'.join(csv_paths).encode()).hexdigest()
+    cache_dir  = os.path.join(test_dir, '.test_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f'test_data_{cache_key}.pkl')
+
+    if use_cache and os.path.exists(cache_file):
+        try:
+            print(f"Loading test dataset from cache: {cache_file}")
+            with open(cache_file, 'rb') as f:
+                cached = pickle.load(f)
+            return cached['image_paths'], cached['labels']
+        except Exception as e:
+            print(f"Cache load failed ({e}), rebuilding...")
+
+    class_to_idx = {'genuine': 0, 'tamper': 1}
+    all_paths, all_labels = [], []
+
+    print("Loading test dataset from CSVs...")
+    for csv_path in csv_paths:
+        try:
+            df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+            if 'image_path' not in df.columns or 'fraud_type' not in df.columns:
+                continue
+            count = 0
+            for _, row in df.iterrows():
+                img_path   = row['image_path']
+                fraud_type = row['fraud_type'].strip().lower()
+                if fraud_type not in class_to_idx:
+                    continue
+                if os.path.exists(img_path):
+                    all_paths.append(img_path)
+                    all_labels.append(class_to_idx[fraud_type])
+                    count += 1
+                else:
+                    logging.warning(f"Not found: {img_path}")
+            print(f"  {os.path.basename(csv_path)}: {count} images")
+        except Exception as e:
+            print(f"  [ERROR] {csv_path}: {e}")
+
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump({'image_paths': all_paths, 'labels': all_labels}, f)
+        print(f"Saved test cache: {cache_file}")
+    except Exception as e:
+        print(f"Failed to save cache: {e}")
+
+    return all_paths, all_labels
+
+
+def evaluate_test_split(model):
+    all_paths, all_labels = _load_test_samples(TEST_DIR)
+    samples = list(zip(all_paths, all_labels))
+
+    counts = {
+        'genuine': sum(1 for l in all_labels if l == 0),
+        'tamper':  sum(1 for l in all_labels if l == 1),
+    }
 
     loader = DataLoader(_EvalDataset(samples), batch_size=32,
-                        shuffle=False, num_workers=0, pin_memory=True)
+                        shuffle=False, num_workers=4, pin_memory=True)
 
     all_labels, all_probs = [], []
     model.eval()
