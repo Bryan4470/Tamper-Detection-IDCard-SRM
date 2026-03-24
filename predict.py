@@ -16,9 +16,11 @@ import sys
 import argparse
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from PIL import Image
 import numpy as np
+from sklearn.metrics import f1_score, roc_auc_score, confusion_matrix
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
@@ -26,7 +28,7 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CKPT_PATH        = '../checkpoints/best_model.pth'
+CKPT_PATH        = '../checkpoints/best_f1.pth'
 TEST_DIR         = r'C:\Users\bryancfk\extracted_images_test'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
@@ -37,16 +39,19 @@ CLASSES          = {0: 'genuine', 1: 'tamper'}
 transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
 
-def load_model():
+def load_model(ckpt_path=CKPT_PATH):
     model = Two_Stream_Net().to(DEVICE)
-    ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
+    ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
-    print(f"Loaded checkpoint from epoch {ckpt['epoch']} (val_acc={ckpt['val_acc']:.4f})")
+    print(f"Loaded: {ckpt_path}  "
+          f"(epoch={ckpt['epoch']}, "
+          f"f1={ckpt.get('val_f1', 'n/a')}, "
+          f"auc={ckpt.get('val_auc', 'n/a')})")
     return model
 
 
@@ -69,11 +74,22 @@ def predict_image(model, image_path):
     }
 
 
-def evaluate_test_split(model):
-    from sklearn.metrics import classification_report, confusion_matrix
+class _EvalDataset(Dataset):
+    def __init__(self, samples):   # samples: [(path, label), ...]
+        self.samples = samples
 
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        img = Image.open(path).convert('RGB')
+        return transform(img), label
+
+
+def evaluate_test_split(model):
     EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
-    all_preds, all_labels = [], []
+    samples = []
     counts = {'genuine': 0, 'tamper': 0}
 
     for cls_name, label in [('genuine', 0), ('tamper', 1)]:
@@ -84,42 +100,61 @@ def evaluate_test_split(model):
         files = [f for f in os.listdir(cls_dir)
                  if os.path.splitext(f)[1].lower() in EXTS]
         counts[cls_name] = len(files)
-        for fname in files:
-            result = predict_image(model, os.path.join(cls_dir, fname))
-            pred_label = 1 if result['prediction'] == 'tamper' else 0
-            all_preds.append(pred_label)
-            all_labels.append(label)
+        samples.extend((os.path.join(cls_dir, f), label) for f in files)
+
+    loader = DataLoader(_EvalDataset(samples), batch_size=32,
+                        shuffle=False, num_workers=0, pin_memory=True)
+
+    all_labels, all_probs = [], []
+    model.eval()
+    with torch.no_grad():
+        for imgs, labels in loader:
+            imgs = imgs.to(DEVICE)
+            logits, _, _ = model(imgs)
+            probs = F.softmax(logits, dim=1)[:, 1]
+            all_labels.extend(labels.numpy())
+            all_probs.extend(probs.cpu().numpy())
+
+    labels_np = np.array(all_labels)
+    probs_np  = np.array(all_probs)
+    preds_np  = (probs_np >= TAMPER_THRESHOLD).astype(int)
+
+    cm = confusion_matrix(labels_np, preds_np, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    far = fn / (fn + tp) if (fn + tp) > 0 else 0.0   # tamper accepted as genuine
+    frr = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # genuine rejected as tamper
+    f1  = f1_score(labels_np, preds_np, zero_division=0)
+    auc = roc_auc_score(labels_np, probs_np) if len(np.unique(labels_np)) > 1 else 0.0
 
     print(f"\nEvaluating on: {TEST_DIR}")
     print(f"  genuine images : {counts['genuine']}")
     print(f"  tamper  images : {counts['tamper']}")
     print(f"  total          : {counts['genuine'] + counts['tamper']}")
-    print("\nClassification Report:")
-    print(classification_report(all_labels, all_preds,
-                                target_names=['genuine', 'tamper']))
-    print("Confusion Matrix:")
-    cm = confusion_matrix(all_labels, all_preds)
-    tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+    print(f"  threshold      : {TAMPER_THRESHOLD}")
+    print(f"\nConfusion Matrix:")
     print(f"                 Predicted")
     print(f"                 Genuine  Tamper")
     print(f"Actual Genuine   {tn:4d}     {fp:4d}")
     print(f"Actual Tamper    {fn:4d}     {tp:4d}")
-
-    far = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # tampered accepted as genuine
-    frr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # genuine rejected as tampered
     print(f"\nFAR (tamper accepted as genuine): {far*100:.2f}%")
     print(f"FRR (genuine rejected as tamper): {frr*100:.2f}%")
+    print(f"F1 Score:                         {f1:.4f}")
+    print(f"AUC-ROC:                          {auc:.4f}")
 
 
 def main():
     parser = argparse.ArgumentParser(description='IC Card Tamper Detection')
-    parser.add_argument('--image',  type=str, help='Path to single image')
-    parser.add_argument('--folder', type=str, help='Path to folder of images')
-    parser.add_argument('--eval',   action='store_true',
-                        help='Evaluate on data/test/ split with metrics')
+    parser.add_argument('--image',      type=str, help='Path to single image')
+    parser.add_argument('--folder',     type=str, help='Path to folder of images')
+    parser.add_argument('--eval',       action='store_true',
+                        help='Evaluate on test split with metrics')
+    parser.add_argument('--checkpoint', type=str, default=CKPT_PATH,
+                        help='Checkpoint to load (default: best_f1.pth). '
+                             'Options: best_f1.pth, best_auc.pth, best_frr_under_far.pth, last_epoch.pth')
     args = parser.parse_args()
 
-    model = load_model()
+    model = load_model(args.checkpoint)
 
     if args.image:
         result = predict_image(model, args.image)
