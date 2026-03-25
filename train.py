@@ -14,6 +14,7 @@ from torchvision import transforms
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 # Add src to path so imports work
@@ -24,7 +25,7 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
-SRC_DIR     = r'C:\Users\bryancfk\extracted_images'   # genuine/ and tamper/ inside
+SRC_DIR     = '/mnt3/auto-ekyc/id_physical_tamper_new/data'   # genuine/ and tamper/ inside
 CKPT_DIR    = '../checkpoints'
 BATCH_SIZE  = 4
 NUM_EPOCHS  = 30
@@ -42,9 +43,11 @@ EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
 
 
 def make_splits(src_dir, val_fraction, seed):
-    """Scan src_dir/genuine and src_dir/tamper, return train/val sample lists.
-    Each sample is (abs_path, label).  Split is stratified per class.
+    """Load image paths from CSVs under src_dir/genuine and src_dir/tamper.
+    Each CSV must have an 'image_path' column.
+    Returns (train_samples, val_samples) as [(abs_path, label), ...].
     """
+    import pandas as pd
     rng = np.random.default_rng(seed)
     train_samples, val_samples = [], []
 
@@ -53,17 +56,23 @@ def make_splits(src_dir, val_fraction, seed):
         if not os.path.isdir(cls_dir):
             print(f"[WARN] Missing folder: {cls_dir}")
             continue
-        files = sorted([
-            os.path.join(cls_dir, f)
-            for f in os.listdir(cls_dir)
-            if os.path.splitext(f)[1].lower() in EXTS
-        ])
+        csv_files = sorted(f for f in os.listdir(cls_dir) if f.endswith('.csv'))
+        files = []
+        for csv_file in csv_files:
+            try:
+                df = pd.read_csv(os.path.join(cls_dir, csv_file), dtype=str, keep_default_na=False)
+                if 'image_path' not in df.columns:
+                    print(f"[SKIP] {csv_file}: no 'image_path' column")
+                    continue
+                files.extend(p for p in df['image_path'] if os.path.exists(p))
+            except Exception as e:
+                print(f"[ERROR] {csv_file}: {e}")
+        print(f"  {cls_name}: {len(files)} images from {len(csv_files)} CSV(s)")
+
         idx = rng.permutation(len(files))
         n_val = max(1, int(len(files) * val_fraction))
-        val_idx   = idx[:n_val]
-        train_idx = idx[n_val:]
-        train_samples.extend((files[i], label) for i in train_idx)
-        val_samples.extend((files[i],   label) for i in val_idx)
+        train_samples.extend((files[i], label) for i in idx[n_val:])
+        val_samples.extend((files[i],   label) for i in idx[:n_val])
 
     return train_samples, val_samples
 

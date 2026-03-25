@@ -27,7 +27,7 @@ from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
 CKPT_PATH        = '../checkpoints/best_model.pth'
-TEST_DIR         = r'C:\Users\bryancfk\extracted_images_test'
+TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
 DEVICE           = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -70,25 +70,32 @@ def predict_image(model, image_path):
 
 
 def evaluate_test_split(model):
+    import pandas as pd
     from sklearn.metrics import classification_report, confusion_matrix
 
-    EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+    class_to_idx = {'genuine': 0, 'tamper': 1}
     all_preds, all_labels = [], []
     counts = {'genuine': 0, 'tamper': 0}
 
-    for cls_name, label in [('genuine', 0), ('tamper', 1)]:
-        cls_dir = os.path.join(TEST_DIR, cls_name)
-        if not os.path.isdir(cls_dir):
-            print(f"[WARN] Missing: {cls_dir}")
-            continue
-        files = [f for f in os.listdir(cls_dir)
-                 if os.path.splitext(f)[1].lower() in EXTS]
-        counts[cls_name] = len(files)
-        for fname in files:
-            result = predict_image(model, os.path.join(cls_dir, fname))
-            pred_label = 1 if result['prediction'] == 'tamper' else 0
-            all_preds.append(pred_label)
-            all_labels.append(label)
+    csv_files = sorted(f for f in os.listdir(TEST_DIR) if f.endswith('.csv'))
+    for csv_file in csv_files:
+        try:
+            df = pd.read_csv(os.path.join(TEST_DIR, csv_file), dtype=str, keep_default_na=False)
+            if 'image_path' not in df.columns or 'fraud_type' not in df.columns:
+                print(f"[SKIP] {csv_file}: missing 'image_path' or 'fraud_type' column")
+                continue
+            for _, row in df.iterrows():
+                img_path   = row['image_path']
+                fraud_type = row['fraud_type'].strip().lower()
+                if fraud_type not in class_to_idx or not os.path.exists(img_path):
+                    continue
+                label = class_to_idx[fraud_type]
+                counts[fraud_type] += 1
+                result = predict_image(model, img_path)
+                all_preds.append(1 if result['prediction'] == 'tamper' else 0)
+                all_labels.append(label)
+        except Exception as e:
+            print(f"[ERROR] {csv_file}: {e}")
 
     print(f"\nEvaluating on: {TEST_DIR}")
     print(f"  genuine images : {counts['genuine']}")
