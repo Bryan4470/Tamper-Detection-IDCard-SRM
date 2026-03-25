@@ -11,12 +11,17 @@ training:
   learning_rate: 1.0e-4
   min_lr: 1.0e-6
   warmup_epochs: 3
-  weight_decay: 1.0e-2
+  weight_decay: 1.0e-3
   grad_clip: 1.0
+  loss_weight_genuine: 1.0
+  loss_weight_tamper: 2.0
+  att_aux_weight: 0.1           # auxiliary attention map BCE loss weight
+  focal_gamma: 2.0              # focal loss gamma (0 = standard CE)
 
 early_stopping:
-  patience: 10
-  min_delta: 5.0e-4
+  patience: 20
+  min_delta: 1.0e-4
+  monitor: 'far_constrained'   # 'far_constrained' | 'f1' | 'auc'
 
 evaluation:
   tamper_threshold: 0.35           # classification threshold (must match predict.py)

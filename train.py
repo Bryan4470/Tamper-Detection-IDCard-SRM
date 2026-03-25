@@ -6,6 +6,7 @@ Run from the SRM/ directory:
     python train.py --epochs 50 --lr 5e-5
 """
 
+import io
 import os
 import sys
 import random
@@ -16,6 +17,7 @@ import yaml
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -42,9 +44,7 @@ CKPT_DIR      = '../checkpoints'
 BATCH_SIZE    = _CFG['data']['batch_size']
 NUM_EPOCHS    = _CFG['training']['epochs']
 LR            = _CFG['training']['learning_rate']
-MIN_LR        = _CFG['training']['min_lr']
-WARMUP_EPOCHS = _CFG['training']['warmup_epochs']
-WEIGHT_DECAY  = _CFG['training']['weight_decay']
+WEIGHT_DECAY  = 1e-4
 GRAD_CLIP     = _CFG['training']['grad_clip']
 IMAGE_SIZE    = _CFG['data']['image_size']
 NUM_CLASSES   = 2                  # genuine=0, tampered=1
@@ -54,13 +54,12 @@ PERSIST_WRKRS = _CFG['data'].get('persistent_workers', False) and NUM_WORKERS > 
 SEED          = _CFG.get('seed', 42)
 DEVICE        = 'cuda:2' if torch.cuda.is_available() else 'cpu'
 
-# Early stopping
-ES_PATIENCE        = _CFG['early_stopping']['patience']
 ES_MIN_DELTA       = _CFG['early_stopping']['min_delta']
 
 # Evaluation
 TAMPER_THRESHOLD   = _CFG['evaluation']['tamper_threshold']  # must match predict.py
 FAR_THRESHOLD      = _CFG['evaluation']['far_threshold']
+
 # ────────────────────────────────────────────────────────────────────────────
 
 os.makedirs(CKPT_DIR, exist_ok=True)
@@ -194,17 +193,18 @@ class ICCardDataset(Dataset):
 
 train_tf = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    transforms.RandomRotation(degrees=5),           # slight scan angle variation
-    transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomRotation(degrees=15),          # real-world scan angle variation
+    transforms.ColorJitter(brightness=0.1, contrast=0.1),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406],     # ImageNet mean
-                         [0.229, 0.224, 0.225]),    # ImageNet std
+    transforms.Normalize([0.5, 0.5, 0.5],           # [-1, 1] range — matches SRM filter scale
+                         [0.5, 0.5, 0.5]),
 ])
 
 val_tf = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
 ])
 
 
@@ -250,7 +250,7 @@ def validate(model, loader, criterion, device, threshold=TAMPER_THRESHOLD):
 
 
 def save_checkpoint(path, epoch, model, optimizer, scheduler, scaler, metrics,
-                    best_val_f1, best_val_auc, best_frr_under_far, patience_counter):
+                    best_val_f1, best_val_auc, best_frr_under_far):
     ckpt = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -259,7 +259,6 @@ def save_checkpoint(path, epoch, model, optimizer, scheduler, scaler, metrics,
         'best_val_f1': best_val_f1,
         'best_val_auc': best_val_auc,
         'best_frr_under_far': best_frr_under_far,
-        'patience_counter': patience_counter,
         **{f'val_{k}': v for k, v in metrics.items()},
     }
     if scaler is not None:
@@ -281,7 +280,6 @@ def load_checkpoint(path, model, optimizer, scheduler, scaler, device):
         'best_val_f1':        ckpt.get('best_val_f1', 0.0),
         'best_val_auc':       ckpt.get('best_val_auc', 0.0),
         'best_frr_under_far': ckpt.get('best_frr_under_far', float('inf')),
-        'patience_counter':   ckpt.get('patience_counter', 0),
     }
 
 
@@ -307,27 +305,17 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
     print(f"Model loaded. Running on: {DEVICE}")
 
     # Loss
-    criterion = nn.CrossEntropyLoss(
-        weight=torch.tensor([1.0, 1.25]).to(DEVICE)
-    )
+    criterion = nn.CrossEntropyLoss()
 
-    # AdamW optimizer — start at MIN_LR so warmup ramps up correctly
-    optimizer = optim.AdamW(model.parameters(), lr=MIN_LR, weight_decay=WEIGHT_DECAY)
-
-    # Warmup + cosine annealing via SequentialLR (avoids scheduler init conflict)
-    warmup_scheduler = optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=MIN_LR / lr, end_factor=1.0, total_iters=WARMUP_EPOCHS
-    )
-    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=num_epochs - WARMUP_EPOCHS, eta_min=MIN_LR
-    )
-    scheduler = optim.lr_scheduler.SequentialLR(
-        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[WARMUP_EPOCHS]
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
+    scheduler = optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=_CFG['training'].get('scheduler_step', 10),
+        gamma=_CFG['training'].get('scheduler_gamma', 0.5),
     )
 
     # Mixed precision
-    use_amp = (DEVICE == 'cuda')
+    use_amp = DEVICE.startswith('cuda')
     scaler  = torch.cuda.amp.GradScaler() if use_amp else None
 
     # Tracking (may be overwritten by resume)
@@ -335,7 +323,6 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
     best_val_f1          = 0.0
     best_val_auc         = 0.0
     best_frr_under_far   = float('inf')
-    patience_counter     = 0
 
     # Resume
     if resume_path:
@@ -344,15 +331,13 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
         best_val_f1        = state['best_val_f1']
         best_val_auc       = state['best_val_auc']
         best_frr_under_far = state['best_frr_under_far']
-        patience_counter   = state['patience_counter']
         print(f"Resumed at epoch {start_epoch} | best_f1={best_val_f1:.4f} | "
-              f"best_auc={best_val_auc:.4f} | patience={patience_counter}/{ES_PATIENCE}")
+              f"best_auc={best_val_auc:.4f}")
 
     ckpt_kwargs = lambda m: dict(
         best_val_f1=best_val_f1,
         best_val_auc=best_val_auc,
         best_frr_under_far=best_frr_under_far,
-        patience_counter=patience_counter,
     )
 
     val_m = {}
@@ -411,13 +396,10 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
         # ── Checkpoints ────────────────────────────────────────
         if val_m['f1'] > best_val_f1 + ES_MIN_DELTA:
             best_val_f1 = val_m['f1']
-            patience_counter = 0
             save_checkpoint(os.path.join(CKPT_DIR, 'best_f1.pth'),
                             epoch, model, optimizer, scheduler, scaler, val_m,
                             **ckpt_kwargs(val_m))
             print(f"  ✓ Saved best_f1.pth  (f1={best_val_f1:.4f})")
-        else:
-            patience_counter += 1
 
         if val_m['auc'] > best_val_auc:
             best_val_auc = val_m['auc']
@@ -434,11 +416,6 @@ def train(resume_path=None, num_epochs=NUM_EPOCHS, lr=LR):
             print(f"  ✓ Saved best_frr_under_far.pth "
                   f"(frr={best_frr_under_far*100:.2f}% @ far<={FAR_THRESHOLD*100:.0f}%)")
 
-        # ── Early stopping ─────────────────────────────────────
-        if patience_counter >= ES_PATIENCE:
-            print(f"\nEarly stopping triggered at epoch {epoch} "
-                  f"(no F1 improvement for {ES_PATIENCE} epochs)")
-            break
 
     if val_m:
         save_checkpoint(os.path.join(CKPT_DIR, 'last_epoch.pth'),

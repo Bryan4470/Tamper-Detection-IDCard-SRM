@@ -28,7 +28,7 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from model_core import Two_Stream_Net
 
 # ── Config ───────────────────────────────────────────────────────────────────
-CKPT_PATH  = '../checkpoints/best_f1.pth'
+CKPT_PATH  = '../checkpoints/best_frr_under_far.pth'
 TEST_DIR   = r'C:\Users\bryancfk\extracted_images_test'
 IMAGE_SIZE = 256
 DEVICE     = 'cuda' if torch.cuda.is_available() else 'cpu'

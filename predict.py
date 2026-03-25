@@ -32,7 +32,9 @@ os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CKPT_PATH        = '../checkpoints/best_f1.pth'
+_CKPT_PREFERRED  = '../checkpoints/best_frr_under_far.pth'
+_CKPT_FALLBACK   = '../checkpoints/best_f1.pth'
+CKPT_PATH        = _CKPT_PREFERRED if os.path.exists(_CKPT_PREFERRED) else _CKPT_FALLBACK
 TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
@@ -43,7 +45,7 @@ CLASSES          = {0: 'genuine', 1: 'tamper'}
 transform = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
 ])
 
 

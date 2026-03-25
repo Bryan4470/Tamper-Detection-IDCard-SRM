@@ -63,7 +63,11 @@ The model (`src/model_core.py: Two_Stream_Net`) is a **two-stream network** adap
 | Train/val split ratio | `train.py` | `VAL_SPLIT` |
 | Tamper decision threshold | `predict.py` | `TAMPER_THRESHOLD` |
 | Image size | `train.py` / `predict.py` | `IMAGE_SIZE` |
-| Dropout | `src/model_core.py` | `dropout=0.5` in both `TransferModel` calls |
+| Dropout | `src/model_core.py` | `dropout=0.3` in both `TransferModel` calls |
+| Tamper class loss weight | `config.yaml` | `training.loss_weight_tamper` |
+| Attention aux loss weight | `config.yaml` | `training.att_aux_weight` |
+| Focal loss gamma | `config.yaml` | `training.focal_gamma` |
+| Early stopping monitor | `config.yaml` | `early_stopping.monitor` |
 
 ## Classification Threshold
 
@@ -71,8 +75,16 @@ The model (`src/model_core.py: Two_Stream_Net`) is a **two-stream network** adap
 
 ## Loss & Class Imbalance
 
-Current loss: `nn.CrossEntropyLoss()`. To address the ~55/45 genuine/tamper imbalance and reduce FAR, apply class weighting:
+Current loss is a three-component combination:
+
+1. **Focal loss** (`src/loss/am_softmax.py: focal_loss`, gamma=2.0) applied on per-sample cross-entropy — down-weights easy correct predictions and focuses gradient on hard borderline tamper cases (the primary FAR failure mode).
+2. **Class-weighted CE** — tamper class upweighted (`loss_weight_tamper: 2.0` in `config.yaml`) to penalise false negatives on tampered cards more heavily.
+3. **Auxiliary attention map loss** — BCE loss between `att_map` output and the tamper label (weight=0.1, `att_aux_weight` in `config.yaml`). Forces the `SRMPixelAttention` module to spatially localize tamper regions rather than treating every image globally.
+
 ```python
-nn.CrossEntropyLoss(weight=torch.tensor([1.0, 1.25]).to(DEVICE))
+per_sample_ce = F.cross_entropy(logits, labels, weight=criterion.weight, reduction='none')
+loss = focal_loss(per_sample_ce, gamma=FOCAL_GAMMA)
+loss += ATT_AUX_WEIGHT * F.binary_cross_entropy(att_map_upsampled, tamper_target)
 ```
-`src/loss/am_softmax.py` contains `AMSoftmaxLoss` and `focal_loss` — these were part of the original face forgery codebase and are not used in the current IC card training pipeline.
+
+All three weights are configurable in `config.yaml` under `training`. `src/loss/am_softmax.py` also contains `AMSoftmaxLoss` (not currently used).

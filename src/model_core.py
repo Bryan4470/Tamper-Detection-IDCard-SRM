@@ -64,11 +64,11 @@ class Two_Stream_Net(nn.Module):
     def __init__(self):
         super().__init__()
         self.xception_rgb = TransferModel(
-            'xception', dropout=0.5, inc=3, return_fea=True)
+            'xception', dropout=0.4, inc=3, return_fea=True)
         self.xception_srm = TransferModel(
-            'xception', dropout=0.5, inc=3, return_fea=True)
+            'xception', dropout=0.4, inc=3, return_fea=True)
 
-        self.srm_conv0 = SRMConv2d_simple(inc=3)
+        self.srm_conv0 = SRMConv2d_simple()
         self.srm_conv1 = SRMConv2d_Separate(32, 32)
         self.srm_conv2 = SRMConv2d_Separate(64, 64)
         self.relu = nn.ReLU(inplace=True)

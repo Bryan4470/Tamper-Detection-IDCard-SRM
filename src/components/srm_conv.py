@@ -119,3 +119,27 @@ class SRMConv2d_Separate(nn.Module):
         return filters
 
 
+# class SRMConv2d_Learnable(nn.Module):
+#     """Fixed SRM filter bank + N learnable filters, projected back to 3 channels.
+
+#     Keeps the fixed KB/KV/horizontal priors as a stable starting point while
+#     allowing the model to discover IC-card-specific noise residuals via the
+#     learnable branch. The Conv1x1 projection keeps the output channel count at
+#     3 so xception_srm receives the same shape as before.
+#     """
+
+#     def __init__(self, inc=3, n_learnable=3):
+#         super(SRMConv2d_Learnable, self).__init__()
+#         self.fixed = SRMConv2d_simple(inc=inc, learnable=False)
+#         self.learn_conv = nn.Conv2d(inc, n_learnable, kernel_size=5, padding=2, bias=False)
+#         nn.init.normal_(self.learn_conv.weight, mean=0.0, std=0.01)
+#         self.truc = nn.Hardtanh(-3, 3)
+#         # Project (3 fixed + n_learnable) channels back to 3 so downstream is unchanged
+#         self.proj = nn.Conv2d(3 + n_learnable, 3, kernel_size=1, bias=False)
+#         nn.init.kaiming_normal_(self.proj.weight, a=1)
+
+#     def forward(self, x):
+#         fixed_out = self.fixed(x)                        # (B, 3, H, W)
+#         learn_out = self.truc(self.learn_conv(x))        # (B, n_learnable, H, W)
+#         combined  = torch.cat([fixed_out, learn_out], dim=1)
+#         return self.proj(combined)                       # (B, 3, H, W)
