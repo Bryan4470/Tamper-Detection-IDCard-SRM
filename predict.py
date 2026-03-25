@@ -20,13 +20,14 @@ from torchvision import transforms
 from PIL import Image
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_THIS_DIR, 'src'))
+os.chdir(os.path.join(_THIS_DIR, 'src'))
 
 from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CKPT_PATH        = '../checkpoints/best_model.pth'
+CKPT_PATH        = '../checkpoints/best_acc.pth'
 TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
@@ -71,10 +72,10 @@ def predict_image(model, image_path):
 
 def evaluate_test_split(model):
     import pandas as pd
-    from sklearn.metrics import classification_report, confusion_matrix
+    from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score
 
     class_to_idx = {'genuine': 0, 'tamper': 1}
-    all_preds, all_labels = [], []
+    all_preds, all_labels, all_probs = [], [], []
     counts = {'genuine': 0, 'tamper': 0}
 
     csv_files = sorted(f for f in os.listdir(TEST_DIR) if f.endswith('.csv'))
@@ -94,6 +95,7 @@ def evaluate_test_split(model):
                 result = predict_image(model, img_path)
                 all_preds.append(1 if result['prediction'] == 'tamper' else 0)
                 all_labels.append(label)
+                all_probs.append(result['prob_tampered'])
         except Exception as e:
             print(f"[ERROR] {csv_file}: {e}")
 
@@ -112,10 +114,21 @@ def evaluate_test_split(model):
     print(f"Actual Genuine   {tn:4d}     {fp:4d}")
     print(f"Actual Tamper    {fn:4d}     {tp:4d}")
 
+    # Compute metrics
     far = fn / (fn + tp) if (fn + tp) > 0 else 0.0  # tampered accepted as genuine
     frr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  # genuine rejected as tampered
-    print(f"\nFAR (tamper accepted as genuine): {far*100:.2f}%")
+    f1 = f1_score(all_labels, all_preds)
+    try:
+        auc = roc_auc_score(all_labels, all_probs)
+    except ValueError:
+        auc = 0.0  # only one class present
+
+    print(f"\n{'='*40}")
+    print(f"FAR (tamper accepted as genuine): {far*100:.2f}%")
     print(f"FRR (genuine rejected as tamper): {frr*100:.2f}%")
+    print(f"F1 Score:                         {f1:.4f}")
+    print(f"AUC:                              {auc:.4f}")
+    print(f"{'='*40}")
 
 
 def main():
