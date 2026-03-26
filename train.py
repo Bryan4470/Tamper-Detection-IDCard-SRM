@@ -31,6 +31,8 @@ from model_core import Two_Stream_Net
 # ── Config ──────────────────────────────────────────────────────────────────
 SRC_DIR     = '/mnt3/auto-ekyc/id_physical_tamper_new/data'   # genuine/ and tamper/ inside
 CKPT_DIR    = '../checkpoints'
+METRICS_CSV = '../checkpoints/training_metrics.csv'
+LOG_INTERVAL = 3            # log metrics every N epochs
 BATCH_SIZE  = 18
 NUM_WORKERS = 6             # dataloader workers (0 = main process only)
 NUM_EPOCHS  = 30
@@ -191,6 +193,9 @@ def train(resume_path=None):
     elif resume_path:
         print(f"[WARN] Checkpoint not found: {resume_path}, starting from scratch")
 
+    # Initialize metrics log for CSV
+    metrics_log = []
+
     for epoch in range(start_epoch, NUM_EPOCHS + 1):
         # ── Train ──────────────────────────────────────────────
         model.train()
@@ -289,6 +294,24 @@ def train(resume_path=None):
         # Save latest checkpoint (for resuming interrupted training)
         latest_path = os.path.join(CKPT_DIR, 'latest.pth')
         save_checkpoint(model, optimizer, scheduler, epoch, current_metrics, latest_path)
+
+        # Log metrics every LOG_INTERVAL epochs
+        if epoch % LOG_INTERVAL == 0:
+            metrics_row = {
+                'epoch': epoch,
+                'train_loss': round(train_loss, 3),
+                'train_acc': round(train_acc, 3),
+                'val_acc': round(val_acc, 3),
+                'FAR': round(far, 5),
+                'FRR': round(frr, 5),
+                'val_f1': round(val_f1, 3),
+                'val_auc': round(val_auc, 3),
+            }
+            metrics_log.append(metrics_row)
+            # Save CSV after each log interval
+            metrics_df = pd.DataFrame(metrics_log)
+            metrics_df.to_csv(METRICS_CSV, index=False)
+            print(f"  -> Metrics saved to {METRICS_CSV}")
 
     print(f"\nTraining complete.")
     print(f"  Best ACC: {best_metrics['best_acc']:.4f}")

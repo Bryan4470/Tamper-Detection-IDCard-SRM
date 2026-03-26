@@ -27,10 +27,10 @@ os.chdir(os.path.join(_THIS_DIR, 'src'))
 from model_core import Two_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
-CKPT_PATH        = '../checkpoints/best_acc.pth'
+CKPT_PATH        = '../checkpoints/best_auc.pth'
 TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
-TAMPER_THRESHOLD = 0.2   # adjust after threshold tuning
+TAMPER_THRESHOLD = 0.1   # adjust after threshold tuning
 DEVICE           = 'cuda' if torch.cuda.is_available() else 'cpu'
 CLASSES          = {0: 'genuine', 1: 'tamper'}
 # ────────────────────────────────────────────────────────────────────────────
