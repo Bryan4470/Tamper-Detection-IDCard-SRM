@@ -1,5 +1,8 @@
 """
 Inference script for IC Card Tamper Detection.
+
+Supports both Two-Stream and Three-Stream models (auto-detected from checkpoint).
+
 Usage:
     # Single image
     python predict.py --image path/to/card.jpg
@@ -9,6 +12,9 @@ Usage:
 
     # Evaluate test split with metrics
     python predict.py --eval
+
+    # Specify checkpoint (auto-detects model type)
+    python predict.py --checkpoint checkpoints/three_stream_best_auc.pth --eval
 """
 
 import os
@@ -24,14 +30,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, 'src'))
 os.chdir(os.path.join(_THIS_DIR, 'src'))
 
-from model_core import Two_Stream_Net
+from model_core import Two_Stream_Net, Three_Stream_Net
 
 # ── Config ──────────────────────────────────────────────────────────────────
 CKPT_PATH        = '../checkpoints/best_auc.pth'
 TEST_DIR         = '/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset'
 IMAGE_SIZE       = 256
 TAMPER_THRESHOLD = 0.1   # adjust after threshold tuning
-DEVICE           = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE           = 'cuda:1' if torch.cuda.is_available() else 'cpu'
 CLASSES          = {0: 'genuine', 1: 'tamper'}
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -42,21 +48,78 @@ transform = transforms.Compose([
 ])
 
 
-def load_model():
-    model = Two_Stream_Net().to(DEVICE)
-    ckpt = torch.load(CKPT_PATH, map_location=DEVICE)
-    model.load_state_dict(ckpt['model_state_dict'])
+def detect_model_type(ckpt_path):
+    """
+    Auto-detect model type from checkpoint.
+
+    Returns:
+        'three_stream' or 'two_stream'
+    """
+    ckpt = torch.load(ckpt_path, map_location='cpu')
+
+    # Check for explicit model_type field
+    if 'model_type' in ckpt:
+        return ckpt['model_type']
+
+    # Check state_dict keys for CB stream components
+    state_dict = ckpt.get('model_state_dict', ckpt)
+    for key in state_dict.keys():
+        if 'cb_stream' in key or 'three_stream_fusion' in key:
+            return 'three_stream'
+
+    return 'two_stream'
+
+
+def load_model(ckpt_path=CKPT_PATH):
+    """
+    Load model from checkpoint, auto-detecting model type.
+
+    Returns:
+        model: Loaded model in eval mode
+        model_type: 'two_stream' or 'three_stream'
+    """
+    model_type = detect_model_type(ckpt_path)
+    print(f"Detected model type: {model_type}")
+
+    if model_type == 'three_stream':
+        model = Three_Stream_Net().to(DEVICE)
+    else:
+        model = Two_Stream_Net().to(DEVICE)
+
+    ckpt = torch.load(ckpt_path, map_location=DEVICE)
+    state_dict = ckpt.get('model_state_dict', ckpt)
+    model.load_state_dict(state_dict)
     model.eval()
-    print(f"Loaded checkpoint from epoch {ckpt['epoch']} (val_acc={ckpt['val_acc']:.4f})")
-    return model
+
+    epoch = ckpt.get('epoch', 'unknown')
+    val_acc = ckpt.get('val_acc', 0.0)
+    val_auc = ckpt.get('val_auc', 0.0)
+    print(f"Loaded checkpoint from epoch {epoch} (val_acc={val_acc:.4f}, val_auc={val_auc:.4f})")
+
+    return model, model_type
 
 
-def predict_image(model, image_path):
+def predict_image(model, image_path, model_type='two_stream'):
+    """
+    Predict a single image.
+
+    Args:
+        model: Loaded model
+        image_path: Path to image
+        model_type: 'two_stream' or 'three_stream'
+
+    Returns:
+        Dictionary with prediction results
+    """
     img = Image.open(image_path).convert('RGB')
     tensor = transform(img).unsqueeze(0).to(DEVICE)  # (1, 3, H, W)
 
     with torch.no_grad():
-        logits, feats, att_map = model(tensor)
+        if model_type == 'three_stream':
+            logits, feats, att_map = model(tensor, return_cb_features=False)
+        else:
+            logits, feats, att_map = model(tensor)
+
         probs = F.softmax(logits, dim=1)[0]
 
     pred_class = 1 if probs[1].item() >= TAMPER_THRESHOLD else 0
@@ -70,7 +133,10 @@ def predict_image(model, image_path):
     }
 
 
-def evaluate_test_split(model):
+def evaluate_test_split(model, model_type='two_stream'):
+    """
+    Evaluate model on test split with full metrics.
+    """
     import pandas as pd
     from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score
 
@@ -92,7 +158,7 @@ def evaluate_test_split(model):
                     continue
                 label = class_to_idx[fraud_type]
                 counts[fraud_type] += 1
-                result = predict_image(model, img_path)
+                result = predict_image(model, img_path, model_type)
                 all_preds.append(1 if result['prediction'] == 'tamper' else 0)
                 all_labels.append(label)
                 all_probs.append(result['prob_tampered'])
@@ -100,6 +166,7 @@ def evaluate_test_split(model):
             print(f"[ERROR] {csv_file}: {e}")
 
     print(f"\nEvaluating on: {TEST_DIR}")
+    print(f"  Model type   : {model_type}")
     print(f"  genuine images : {counts['genuine']}")
     print(f"  tamper  images : {counts['tamper']}")
     print(f"  total          : {counts['genuine'] + counts['tamper']}")
@@ -130,6 +197,13 @@ def evaluate_test_split(model):
     print(f"AUC:                              {auc:.4f}")
     print(f"{'='*40}")
 
+    return {
+        'far': far,
+        'frr': frr,
+        'f1': f1,
+        'auc': auc,
+    }
+
 
 def main():
     parser = argparse.ArgumentParser(description='IC Card Tamper Detection')
@@ -137,12 +211,14 @@ def main():
     parser.add_argument('--folder', type=str, help='Path to folder of images')
     parser.add_argument('--eval',   action='store_true',
                         help='Evaluate on data/test/ split with metrics')
+    parser.add_argument('--checkpoint', type=str, default=CKPT_PATH,
+                        help='Path to model checkpoint')
     args = parser.parse_args()
 
-    model = load_model()
+    model, model_type = load_model(args.checkpoint)
 
     if args.image:
-        result = predict_image(model, args.image)
+        result = predict_image(model, args.image, model_type)
         print(f"\nImage:      {result['path']}")
         print(f"Prediction: {result['prediction'].upper()}")
         print(f"Confidence: {result['confidence']*100:.1f}%")
@@ -154,13 +230,13 @@ def main():
         files = [f for f in os.listdir(args.folder)
                  if os.path.splitext(f)[1].lower() in EXTS]
         for fname in sorted(files):
-            result = predict_image(model, os.path.join(args.folder, fname))
+            result = predict_image(model, os.path.join(args.folder, fname), model_type)
             print(f"{fname:40s}  →  {result['prediction']:8s}  "
                   f"genuine={result['prob_genuine']*100:.1f}%  "
                   f"tamper={result['prob_tampered']*100:.1f}%")
 
     elif args.eval:
-        evaluate_test_split(model)
+        evaluate_test_split(model, model_type)
 
     else:
         parser.print_help()

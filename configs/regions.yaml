@@ -1,0 +1,38 @@
+# Key regions for Malaysian IC card tampering detection
+# Coordinates are normalized (0-1) relative to image dimensions
+# Used by CB stream to extract background patches for consistency analysis
+
+face:
+  x1: 0.62
+  y1: 0.21
+  x2: 0.98
+  y2: 0.88
+  description: "Face photo region"
+
+id_number:
+  x1: 0.02
+  y1: 0.21
+  x2: 0.38
+  y2: 0.32
+  description: "ID number text region"
+
+name_address:
+  x1: 0.0
+  y1: 0.53
+  x2: 0.65
+  y2: 1.0
+  description: "Name and address region"
+
+ghost_face:
+  x1: 0.45
+  y1: 0.25
+  x2: 0.70
+  y2: 0.58
+  description: "Ghost face region"
+
+islam_gender:
+  x1: 0.55
+  y1: 0.80
+  x2: 1.0
+  y2: 1.0
+  description: "Religion and gender region"
