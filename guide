@@ -1,0 +1,2 @@
+ # Train with pretrained ConvNeXt
+  python train.py --backbone convnext

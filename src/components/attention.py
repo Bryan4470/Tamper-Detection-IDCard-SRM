@@ -165,13 +165,18 @@ class CrossModalAttention(nn.Module):
 
 
 class DualCrossModalAttention(nn.Module):
-    """ Dual CMA attention Layer"""
+    """ Dual CMA attention Layer
 
-    def __init__(self, in_dim, activation=None, size=16, ratio=8, ret_att=False):
+    Supports dynamic spatial sizes by lazily initializing linear layers
+    on first forward pass.
+    """
+
+    def __init__(self, in_dim, activation=None, size=None, ratio=8, ret_att=False):
         super(DualCrossModalAttention, self).__init__()
         self.chanel_in = in_dim
         self.activation = activation
         self.ret_att = ret_att
+        self.size = size
 
         # query conv
         self.key_conv1 = nn.Conv2d(
@@ -181,8 +186,15 @@ class DualCrossModalAttention(nn.Module):
         self.key_conv_share = nn.Conv2d(
             in_channels=in_dim//ratio, out_channels=in_dim//ratio, kernel_size=1)
 
-        self.linear1 = nn.Linear(size*size, size*size)
-        self.linear2 = nn.Linear(size*size, size*size)
+        # Linear layers - initialized lazily if size is None
+        if size is not None:
+            self.linear1 = nn.Linear(size*size, size*size)
+            self.linear2 = nn.Linear(size*size, size*size)
+            self._linear_initialized = True
+        else:
+            self.linear1 = None
+            self.linear2 = None
+            self._linear_initialized = False
 
         # separated value conv
         self.value_conv1 = nn.Conv2d(
@@ -201,15 +213,28 @@ class DualCrossModalAttention(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight.data, gain=0.02)
 
+    def _init_linear_layers(self, spatial_size, device):
+        """Initialize linear layers based on actual spatial dimensions."""
+        n = spatial_size
+        self.linear1 = nn.Linear(n, n).to(device)
+        self.linear2 = nn.Linear(n, n).to(device)
+        nn.init.xavier_normal_(self.linear1.weight.data, gain=0.02)
+        nn.init.xavier_normal_(self.linear2.weight.data, gain=0.02)
+        self._linear_initialized = True
+
     def forward(self, x, y):
         """
             inputs :
                 x : input feature maps( B X C X W X H)
             returns :
-                out : self attention value + input feature 
+                out : self attention value + input feature
                 attention: B X N X N (N is Width*Height)
         """
         B, C, H, W = x.size()
+
+        # Lazily initialize linear layers based on actual spatial size
+        if not self._linear_initialized:
+            self._init_linear_layers(H * W, x.device)
 
         def _get_att(a, b):
             proj_key1 = self.key_conv_share(self.key_conv1(a)).view(
