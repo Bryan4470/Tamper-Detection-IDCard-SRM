@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from components.attention import ChannelAttention, SpatialAttention, DualCrossModalAttention
 from components.srm_conv import SRMConv2d_simple, SRMConv2d_Separate
-from networks.resnet_backbone import ResNetStream
+from networks.efficientnet_backbone import EfficientNetStream
 
 
 class SRMPixelAttention(nn.Module):
@@ -63,38 +63,38 @@ class FeatureFusionModule(nn.Module):
 class Two_Stream_Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.resnet_rgb = ResNetStream(num_out_classes=2, dropout=0.4)
-        self.resnet_srm = ResNetStream(num_out_classes=2, dropout=0.4)
+        self.effnet_rgb = EfficientNetStream(num_out_classes=2, dropout=0.4)
+        self.effnet_srm = EfficientNetStream(num_out_classes=2, dropout=0.4)
 
         self.srm_conv0 = SRMConv2d_simple()
-        self.srm_conv1 = SRMConv2d_Separate(64, 64)
-        self.srm_conv2 = SRMConv2d_Separate(64, 64)
+        self.srm_conv1 = SRMConv2d_Separate(48, 48)
+        self.srm_conv2 = SRMConv2d_Separate(24, 24)
         self.relu = nn.ReLU(inplace=True)
 
         self.att_map = None
         self.srm_sa = SRMPixelAttention(3)
         self.srm_sa_post = nn.Sequential(
-            nn.BatchNorm2d(64),
+            nn.BatchNorm2d(24),
             nn.ReLU(inplace=True)
         )
 
-        self.dual_cma0 = DualCrossModalAttention(in_dim=1024, ret_att=False)
-        self.dual_cma1 = DualCrossModalAttention(in_dim=1024, ret_att=False)
+        self.dual_cma0 = DualCrossModalAttention(in_dim=112, size=24, ret_att=False)
+        self.dual_cma1 = DualCrossModalAttention(in_dim=160, size=24, ret_att=False)
 
-        self.fusion = FeatureFusionModule()
+        self.fusion = FeatureFusionModule(in_chan=1792*2, out_chan=1792)
 
         self.att_dic = {}
 
     def features(self, x):
         srm = self.srm_conv0(x)
 
-        x = self.resnet_rgb.fea_part1_0(x)
-        y = self.resnet_srm.fea_part1_0(srm) \
+        x = self.effnet_rgb.fea_part1_0(x)
+        y = self.effnet_srm.fea_part1_0(srm) \
             + self.srm_conv1(x)
         y = self.relu(y)
 
-        x = self.resnet_rgb.fea_part1_1(x)
-        y = self.resnet_srm.fea_part1_1(y) \
+        x = self.effnet_rgb.fea_part1_1(x)
+        y = self.effnet_srm.fea_part1_1(y) \
             + self.srm_conv2(x)
         y = self.relu(y)
 
@@ -104,23 +104,23 @@ class Two_Stream_Net(nn.Module):
         x = x * att + x
         x = self.srm_sa_post(x)
 
-        x = self.resnet_rgb.fea_part2(x)
-        y = self.resnet_srm.fea_part2(y)
+        x = self.effnet_rgb.fea_part2(x)
+        y = self.effnet_srm.fea_part2(y)
 
         x, y = self.dual_cma0(x, y)
 
 
-        x = self.resnet_rgb.fea_part3(x)        
-        y = self.resnet_srm.fea_part3(y)
+        x = self.effnet_rgb.fea_part3(x)        
+        y = self.effnet_srm.fea_part3(y)
  
 
         x, y = self.dual_cma1(x, y)
 
-        x = self.resnet_rgb.fea_part4(x)
-        y = self.resnet_srm.fea_part4(y)
+        x = self.effnet_rgb.fea_part4(x)
+        y = self.effnet_srm.fea_part4(y)
 
-        x = self.resnet_rgb.fea_part5(x)
-        y = self.resnet_srm.fea_part5(y)
+        x = self.effnet_rgb.fea_part5(x)
+        y = self.effnet_srm.fea_part5(y)
 
         fea = self.fusion(x, y)
                 
@@ -128,7 +128,7 @@ class Two_Stream_Net(nn.Module):
         return fea
 
     def classifier(self, fea):
-        out, fea = self.resnet_rgb.classifier(fea)
+        out, fea = self.effnet_rgb.classifier(fea)
         return out, fea
 
     def forward(self, x):
