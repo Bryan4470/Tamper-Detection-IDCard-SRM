@@ -302,6 +302,15 @@ def main():
         results = detector.predict_directory(args.directory, args.batch_size)
         genuine = sum(1 for r in results if r.get('prediction') == 'genuine')
         tampered = sum(1 for r in results if r.get('prediction') == 'tampered')
+
+        print(f"\n{'Image':<60} {'Prediction':<12} {'Genuine':>8} {'Tamper':>8}")
+        print("-" * 92)
+        for r in results:
+            if 'error' in r:
+                print(f"{Path(r['image_path']).name:<60} ERROR")
+            else:
+                print(f"{Path(r['image_path']).name:<60} {r['prediction']:<12} {r['prob_genuine']:>8.4f} {r['prob_tampered']:>8.4f}")
+
         print(f"\nSummary: {genuine} genuine, {tampered} tampered ({len(results)} total)")
 
         if args.output:

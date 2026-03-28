@@ -2,9 +2,10 @@
 
 # Data settings
 data:
-  root_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/data"              # Training data: ./data/genuine/, ./data/tamper/
-  image_size: 224
-  batch_size: 64
+  root_dir: "/mnt3/auto-ekyc/id_physical_tamper_new/data"              # Training data: ./data/genuine/, ./data/tamper/
+  #efficientnetb4 380 b3 224
+  image_size: 380                # EfficientNet-B4 native resolution
+  batch_size: 60
   num_workers: 8
   val_split: 0.2
   test_split: 0.0
@@ -14,7 +15,7 @@ data:
   # This is separate from val_split and used for final evaluation on specific test scenarios
   test_dataset:
     enabled: true
-    csv_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/data/testing_dataset"
+    csv_dir: "/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset"
     # csv_files: If empty or not specified, all CSV files in csv_dir will be loaded automatically.
     #            If specified, only the listed CSV files will be loaded.
     csv_files:
@@ -24,12 +25,12 @@ data:
 
 # Model architecture
 model:
-  backbone: "efficientnet_b3"     # resnet18, resnet50, efficientnet_b0, efficientnet_b3
+  backbone: "efficientnet_b4"     # resnet18, resnet50, efficientnet_b0, efficientnet_b3, efficientnet_b4
   pretrained: true
   num_classes: 2
   dropout: 0.5
   cb_encoder_dim: 128             # Cb encoder output dimension
-  fusion_dim: 256                 # Cross-modal fusion dimension
+  fusion_dim: 512                 # Cross-modal fusion dimension (increased for b4's 1792-dim features)
   patch_grid_size: 4              # 4x4 = 16 patches per region
   regions_config: null            # null = use default configs/regions.yaml
 
@@ -76,7 +77,7 @@ augmentation:
 # Device settings
 device:
   use_cuda: true
-  gpu_id: 3
+  gpu_id: 2
   mixed_precision: true
 
 # Evaluation
@@ -95,8 +96,8 @@ evaluation:
 # Logging
 logging:
   experiment_name: "rgb_cb_model"
-  log_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/logs"
-  save_dir: "/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/checkpoints"
+  log_dir: "logs"
+  save_dir: "checkpoints"
   log_every_n_steps: 50
 
 # Random seed

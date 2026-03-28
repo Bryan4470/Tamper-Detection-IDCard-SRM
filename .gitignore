@@ -22,6 +22,15 @@ logs/
 *.swo
 .claude/
 
+# Images
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
 # Data & Cache
 *.csv
 dataset_cache.pkl

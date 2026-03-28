@@ -10,6 +10,8 @@ services:
       - /mnt/auto-ekyc:/mnt/auto-ekyc
       - /mnt2/auto-ekyc/id_physical_tamper_new:/mnt2/auto-ekyc/id_physical_tamper_new
       - /mnt2/raw_dataset/research/idv:/mnt2/raw_dataset/research/idv
+      - /mnt3/auto-ekyc/id_physical_tamper_new:/mnt3/auto-ekyc/id_physical_tamper_new
+      - /mnt3/tamper_data:/mnt3/tamper_data
     environment:
       - MODEL_PATH=/mnt2/auto-ekyc/id_physical_tamper_new/_dual_stream/trained_model/tamper_with_color_space.pth
       - CONFIG_PATH=/app/configs/config.yaml

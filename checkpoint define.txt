@@ -1,0 +1,5 @@
+
+checkpoints/20260327_023903 - efficientnetb3
+/home/bryanchang/face-tamper-inference/checkpoints/20260327_064011 - efficeintnetb4 
+/home/bryanchang/face-tamper-inference/checkpoints/20260327_091355 - efficientnetb4 - 256 image size
+/home/bryanchang/face-tamper-inference/checkpoints/20260327_094413 - efficientnetb4

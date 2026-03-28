@@ -100,7 +100,8 @@ class RGBCbTamperDetector(nn.Module):
         'resnet18': 512,
         'resnet50': 2048,
         'efficientnet_b0': 1280,
-        'efficientnet_b3': 1536
+        'efficientnet_b3': 1536,
+        'efficientnet_b4': 1792
     }
 
     def __init__(
@@ -153,6 +154,12 @@ class RGBCbTamperDetector(nn.Module):
             base_model = models.efficientnet_b3(weights=None)
             if pretrained:
                 weights_url = 'https://download.pytorch.org/models/efficientnet_b3_rwightman-cf984f9c.pth'
+                state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
+                base_model.load_state_dict(state_dict)
+        elif backbone == 'efficientnet_b4':
+            base_model = models.efficientnet_b4(weights=None)
+            if pretrained:
+                weights_url = 'https://download.pytorch.org/models/efficientnet_b4_rwightman-23ab8bcd.pth'
                 state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
                 base_model.load_state_dict(state_dict)
 

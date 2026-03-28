@@ -102,6 +102,12 @@ class Trainer:
 
         self.writer = SummaryWriter(self.log_dir / f"{config['logging']['experiment_name']}_{timestamp}")
 
+        # File handler for Python logger
+        log_file = self.log_dir / f"{config['logging']['experiment_name']}_{timestamp}.log"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
+
         self._setup_data()
         self._setup_model()
         self._setup_optimizer()
