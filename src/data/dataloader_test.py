@@ -269,9 +269,9 @@ def load_test_dataset_from_csv(
     class_counts = Counter(all_labels)
 
     print(f"\n{'='*70}")
-    print("Test Dataset Summary")
+    print("Test Dataset Summaryyyyy")
     print(f"{'='*70}")
-    print(f"Total images: {len(all_image_paths)}")
+    print(f"Total imagessssssss: {len(all_image_paths)}")
     print("\nClass Distribution:")
     print("-" * 30)
     for idx, class_name in enumerate(class_names):

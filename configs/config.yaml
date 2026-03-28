@@ -2,10 +2,10 @@
 
 # Data settings
 data:
-  root_dir: "/mnt3/auto-ekyc/id_physical_tamper_new/data"              # Training data: ./data/genuine/, ./data/tamper/
-  #efficientnetb4 380 b3 224
-  image_size: 380                # EfficientNet-B4 native resolution
-  batch_size: 60
+  root_dir: "/home/bryancfk/auto-ekyc/id_physical_tamper_new/data"               # Training data: ./data/genuine/, ./data/tamper/
+  #efficientnetb4 380 b3 224 convnext_base 224 xception 299 densenet201 224 swin_b 224
+  image_size: 224                # Swin-B native resolution
+  batch_size: 32
   num_workers: 8
   val_split: 0.2
   test_split: 0.0
@@ -15,7 +15,7 @@ data:
   # This is separate from val_split and used for final evaluation on specific test scenarios
   test_dataset:
     enabled: true
-    csv_dir: "/mnt3/auto-ekyc/id_physical_tamper_new/data/testing_dataset"
+    csv_dir: "/home/bryancfk/auto-ekyc/id_physical_tamper_new/data/testing_dataset"
     # csv_files: If empty or not specified, all CSV files in csv_dir will be loaded automatically.
     #            If specified, only the listed CSV files will be loaded.
     csv_files:
@@ -25,19 +25,21 @@ data:
 
 # Model architecture
 model:
-  backbone: "efficientnet_b4"     # resnet18, resnet50, efficientnet_b0, efficientnet_b3, efficientnet_b4
+  backbone: "swin_b"              # resnet18, resnet50, efficientnet_b0, efficientnet_b3, efficientnet_b4, convnext_base, xception, densenet201, swin_b
   pretrained: true
   num_classes: 2
   dropout: 0.5
   cb_encoder_dim: 128             # Cb encoder output dimension
-  fusion_dim: 512                 # Cross-modal fusion dimension (increased for b4's 1792-dim features)
+  fusion_dim: 512                 # Cross-modal fusion dimension
   patch_grid_size: 4              # 4x4 = 16 patches per region
   regions_config: null            # null = use default configs/regions.yaml
 
 # Training settings
 training:
   epochs: 60
-  learning_rate: 0.0005
+  # learning_rate: 0.0005
+  # weight_decay: 0.01
+  learning_rate: 0.0001
   weight_decay: 0.01
   optimizer: "adamw"
   grad_clip_max_norm: 1.0
@@ -55,11 +57,11 @@ training:
   scheduler:
     type: "cosine"
     warmup_epochs: 5
-    min_lr: 0.00005
+    min_lr: 0.000005
 
   early_stopping:
     enabled: true
-    patience: 10
+    patience: 12
     min_delta: 0.0005
     monitor_metric: "f1_score"
 
@@ -77,7 +79,7 @@ augmentation:
 # Device settings
 device:
   use_cuda: true
-  gpu_id: 2
+  gpu_id: 0
   mixed_precision: true
 
 # Evaluation
@@ -95,7 +97,7 @@ evaluation:
 
 # Logging
 logging:
-  experiment_name: "rgb_cb_model"
+  experiment_name: "rgb_cb_swin_b"
   log_dir: "logs"
   save_dir: "checkpoints"
   log_every_n_steps: 50

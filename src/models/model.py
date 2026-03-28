@@ -11,6 +11,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import timm
 import torchvision.models as models
 from typing import Dict
 from torch.hub import load_state_dict_from_url
@@ -101,7 +102,11 @@ class RGBCbTamperDetector(nn.Module):
         'resnet50': 2048,
         'efficientnet_b0': 1280,
         'efficientnet_b3': 1536,
-        'efficientnet_b4': 1792
+        'efficientnet_b4': 1792,
+        'convnext_base': 1024,
+        'xception': 2048,
+        'densenet201': 1920,
+        'swin_b': 1024,
     }
 
     def __init__(
@@ -117,6 +122,7 @@ class RGBCbTamperDetector(nn.Module):
     ):
         super().__init__()
         self.backbone_name = backbone
+        print(f"[Model] Backbone: {backbone} | Feature dim: {self.BACKBONE_DIMS[backbone]} | Pretrained: {pretrained}")
         self.num_classes = num_classes
 
         if regions_config is None:
@@ -162,9 +168,60 @@ class RGBCbTamperDetector(nn.Module):
                 weights_url = 'https://download.pytorch.org/models/efficientnet_b4_rwightman-23ab8bcd.pth'
                 state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
                 base_model.load_state_dict(state_dict)
+        elif backbone == 'convnext_base':
+            base_model = models.convnext_base(weights=None)
+            if pretrained:
+                weights_url = 'https://download.pytorch.org/models/convnext_base-6075fbad.pth'
+                state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
+                base_model.load_state_dict(state_dict)
+        elif backbone == 'xception':
+            base_model = timm.create_model('xception', pretrained=pretrained, num_classes=0, global_pool='avg')
+        elif backbone == 'densenet201':
+            base_model = models.densenet201(weights=None)
+            if pretrained:
+                weights_url = 'https://download.pytorch.org/models/densenet201-c1103571.pth'
+                state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
+                # Remap old-style keys (norm.1 -> norm1, conv.1 -> conv1) used in the checkpoint
+                state_dict = {k.replace('norm.1', 'norm1').replace('norm.2', 'norm2')
+                                .replace('conv.1', 'conv1').replace('conv.2', 'conv2'): v
+                              for k, v in state_dict.items()}
+                base_model.load_state_dict(state_dict)
+        elif backbone == 'swin_b':
+            base_model = models.swin_b(weights=None)
+            if pretrained:
+                weights_url = 'https://download.pytorch.org/models/swin_b-68c6b09e.pth'
+                state_dict = load_state_dict_from_url(weights_url, progress=True, check_hash=False)
+                base_model.load_state_dict(state_dict)
 
-        self.rgb_backbone = nn.Sequential(*list(base_model.children())[:-1])
-        self.rgb_global_pool = nn.AdaptiveAvgPool2d(1)
+        if backbone == 'convnext_base':
+            # ConvNeXt structure differs from ResNet/EfficientNet: must use named submodules.
+            # classifier[0] is LayerNorm2d(1024) — critical because ConvNeXt uses no BatchNorm;
+            # this norm is part of the feature representation and must not be skipped.
+            self.rgb_backbone = nn.Sequential(
+                base_model.features,
+                base_model.avgpool,
+                base_model.classifier[0],  # LayerNorm2d(1024)
+            )
+            self.rgb_global_pool = nn.Identity()  # avgpool already embedded above
+        elif backbone == 'xception':
+            # timm with num_classes=0, global_pool='avg' outputs (B, 2048) flat vector directly
+            self.rgb_backbone = base_model
+            self.rgb_global_pool = nn.Identity()
+        elif backbone == 'swin_b':
+            # Swin-B children: features, norm, permute, avgpool, flatten, head
+            # Must use named submodules — stripping head leaves flatten inside which
+            # outputs (B, 1024) and breaks AdaptiveAvgPool2d downstream
+            self.rgb_backbone = nn.Sequential(
+                base_model.features,   # (B, 7, 7, 1024) at 224px
+                base_model.norm,       # LayerNorm
+                base_model.permute,    # (B, 1024, 7, 7)
+                base_model.avgpool,    # (B, 1024, 1, 1)
+                base_model.flatten,    # (B, 1024)
+            )
+            self.rgb_global_pool = nn.Identity()
+        else:
+            self.rgb_backbone = nn.Sequential(*list(base_model.children())[:-1])
+            self.rgb_global_pool = nn.AdaptiveAvgPool2d(1)
 
         # Cb Stream
         self.bg_extractor = BackgroundRegionExtractor(regions_config, patch_grid_size)
